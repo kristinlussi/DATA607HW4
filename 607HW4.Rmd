@@ -1,0 +1,202 @@
+---
+title: "607HW4"
+author: "Kristin Lussi"
+date: "2023-10-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+We have been provided with a chart that describes arrival delays for two airlines across five destinations. In this analysis, I will compare the arrival delays for the two airlines and for each airport: Los Angeles, Phoenix, San Diego, San Francisco, and Seattle. 
+
+## Load Required Packages
+
+First, let's load the required packages.
+
+```{r, message = FALSE, warning = FALSE}
+library(RMySQL)
+library(dplyr)
+library(tidyr)
+```
+
+## Load Data from SQL Database
+
+The data is stored in a SQL database. Here, we will load the data into R from SQL. 
+
+```{r, message = FALSE, warning = FALSE}
+host <- "localhost"
+source("logincredentials.R")
+dbname <- "arrivals"
+
+# Establish the database connection
+con <- dbConnect(MySQL(), user = user, password = password, dbname = dbname, host = host)
+
+query <- "SELECT * FROM alaska_am"
+
+# Fetch data into a data frame
+arrivals <- dbGetQuery(con, query)
+
+show(arrivals)
+```
+## Clean the Data
+
+Next, we will remove the empty rows and fill the empty cells.
+
+```{r, message = FALSE, warning = FALSE}
+# remove the empty row
+arrivals <- arrivals[c(1,2,4,5),]
+
+# rename the column names
+colnames(arrivals) <- c("Airline", "Status",
+                       "LosAngeles", "Phoenix",
+                       "SanDiego", "SanFrancisco", "Seattle")
+
+# rename the NAs in the Airline column
+arrivals$Airline[2] <- "ALASKA"
+arrivals$Airline[4] <- "AM WEST"
+
+arrivals$Status<- ifelse(grepl("on time", arrivals$Status, ignore.case = TRUE), "on_time", arrivals$Status)
+
+show(arrivals)
+```
+
+## Rearrange the Data using tidyr
+
+Here, we will rearrange the data using tidyr to make it easier to perform the analysis on the delays. 
+
+```{r, message = FALSE, warning = FALSE}
+# rearrange the data so that the destination columns are now put into one column
+tidyarrivals <- pivot_longer(arrivals, 
+                             cols = c(LosAngeles, Phoenix, SanDiego, SanFrancisco, Seattle),
+                             names_to = "Destination", 
+                             values_to = "NumberOfFlights")
+
+# rearrange the data so that the "Number of Flights" is split between two columns: on time and delayed
+tidyarrivals <- pivot_wider(tidyarrivals, names_from = Status, values_from = NumberOfFlights)
+
+show(tidyarrivals)
+```
+
+## Use dplyr to Analyze the Data
+
+Here, we will use the dplyr pacakage to analyze the data.
+
+```{r, message = FALSE, warning = FALSE}
+# create a column for total flights
+tidyarrivals <- tidyarrivals %>%
+  mutate(
+    total_flights = delayed + on_time,
+    # calculate the percentage of flights that are delayed, show only 2 decimal points
+    percentage_delayed = round((delayed / total_flights) *100, digits = 2) ,
+    # calculate the percentage of flights that are on time, show only 2 decimal points
+    percentage_ontime = round((on_time / total_flights) * 100, digits = 2)
+  ) 
+
+# rename Los Angeles
+tidyarrivals$Destination <- ifelse(grepl("LosAngeles", tidyarrivals$Destination), 
+                                     "Los Angeles", tidyarrivals$Destination)
+# rename San Francisco
+tidyarrivals$Destination <- ifelse(grepl("SanFrancisco", tidyarrivals$Destination, 
+                                         ignore.case = TRUE), "San Francisco",
+                                   tidyarrivals$Destination)
+
+# rename San Diego
+tidyarrivals$Destination <- ifelse(grepl("SanDiego", tidyarrivals$Destination,
+                                         ignore.case = TRUE), "San Diego",
+                                   tidyarrivals$Destination)
+
+show(tidyarrivals)
+```
+
+Below, we will create a table showing the average delayed and on time flight percentages for each airline. 
+
+```{r, message = FALSE, warning = FALSE}
+# create a table showing the average delayed and on time percentages for each airline
+airlineArrivalPercent <- tidyarrivals %>%
+  group_by(Airline) %>%
+  summarize(
+    # show the average percentage delayed for each airline
+    "Average Delayed Percentage" = round(mean(percentage_delayed), digits = 2),
+    # show the average percentage on time for each airline
+    "Average On Time Percentage" = round(mean(percentage_ontime), digits = 2)
+  ) %>%
+  as.data.frame() 
+
+show(airlineArrivalPercent)
+```
+
+From the above table, we can conlude that Alaska has the least amount of delays out of the two airlines. 
+
+
+Below, we will create a table that shows the average delayed and on time flight percentages for each destination. 
+
+```{r, message = FALSE, warning = FALSE}
+# create a table showing the average delayed and on time percentages for each destination
+
+destArrivalPercent <- tidyarrivals %>%
+  group_by(Destination) %>%
+  summarize(
+    # show the average percentage delayed for each destination
+    "Average Delayed Percentage" = round(mean(percentage_delayed), 2),
+    # show the average percentage on time for each destination
+  "Average On Time Percentage" = round(mean(percentage_ontime),2)
+  ) %>%
+  as.data.frame()
+
+show(destArrivalPercent)
+```
+From the above table, we can conclude that Phoenix has the least amount of delays out of the 5 airports. 
+
+Below, we will create a graph that shows the distribution of flight status for each airline and each flight destination.
+
+```{r, warning = FALSE, message = FALSE}
+library(ggplot2)
+percent_delayed <- tidyarrivals$percentage_delayed / 100
+percent_ontime <- tidyarrivals$percentage_ontime / 100
+
+ggplot(tidyarrivals, aes(x = Destination)) +
+  geom_bar(aes(y = percent_ontime * total_flights, fill = "On-Time"), stat = "identity") +
+  geom_bar(aes(y = percent_delayed * total_flights, fill = "Delayed"), stat = "identity") +
+  labs(title = "Delayed vs. On-Time Flights by Destination", x = "Destination", y = "Number of Flights") +
+  scale_fill_manual(values = c("On-Time" = "blue", "Delayed" = "red"), name = "Flight Status") +
+  theme_minimal() +
+  theme(legend.position = 'right',
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_wrap(~ Airline, scales = "free")
+```
+
+The above graph shows the frequency of delayed and on time flights for each destination, split by airline.
+
+## Conclusion
+
+We can tell from the analysis that Alaska has the lower amount of delays out of the two airlines. Out of the five airports, Phoenix has the least amount of delays. If you would like to avoid flight delays, based on the above analysis, the best option would be to fly Alaska airlines and fly into Phoenix.
+
+## Recommendations
+```{r, message = FALSE, warning = FALSE}
+total_flights <- select(tidyarrivals, Airline, Destination, total_flights) %>%
+  as.data.frame()
+
+total_airline <- total_flights %>%
+  group_by(Airline) %>%
+  summarise(total_flights = sum(total_flights)) %>%
+  as.data.frame()
+
+total_airline
+```
+```{r, message = FALSE, warning = FALSE}
+total_destination <- total_flights %>%
+  group_by(Destination) %>%
+  summarize(total_flights = sum(total_flights)) %>%
+  as.data.frame()
+
+total_destination
+```
+
+As you can see, the sample sizes for each airline and each airport are not close in size. In order for future analyses to be more accurate, I would suggest that the sample sizes used to be closer in size. The larger the sample size, the more representative of the actual trend for the population. For example, the conclusions I came to in regards to Phoenix flight delays are likely more accurate than the conclusions I came to for San Diego flight delays.
+
+## Sources
+
+Arrival Delay Chart: Numbersense, Kaiser Fung, McGraw Hill, 2013
